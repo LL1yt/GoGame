@@ -3,12 +3,21 @@ package game
 import (
 	"fmt"
 	"math/rand"
+	"time"
 
 	"GoGame/internal/card"
 	"GoGame/internal/player"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
+)
+
+type GamePhase int
+
+const (
+	DrawPhase GamePhase = iota
+	PlayPhase
+	EndPhase
 )
 
 type Game struct {
@@ -22,6 +31,9 @@ type Game struct {
 	DiscardPile   []card.Card
 	TurnCount     int
 	GameOver      bool
+	UIUpdate      func()
+	CurrentPhase  GamePhase
+	EndTurn       chan bool
 }
 
 type PlayResult struct {
@@ -33,12 +45,28 @@ type PlayResult struct {
 func NewGame() *Game {
 	player1, player2 := initializePlayers()
 	game := &Game{
-		Player1: player1,
-		Player2: player2,
-		Deck:    InitializeDeck(),
+		Player1:      player1,
+		Player2:      player2,
+		Deck:         InitializeDeck(),
+		CurrentPhase: DrawPhase,
+		EndTurn:      make(chan bool),
 	}
 	game.CurrentPlayer = &game.Player1
 	return game
+}
+
+func (g *Game) Reset() {
+	player1, player2 := initializePlayers()
+	g.Player1 = player1
+	g.Player2 = player2
+	g.CurrentPlayer = &g.Player1
+	g.Deck = InitializeDeck()
+	g.DiscardPile = []card.Card{}
+	g.TurnCount = 0
+	g.GameOver = false
+	g.CurrentPhase = DrawPhase
+	g.EndTurn = make(chan bool)
+	g.DealInitialHands()
 }
 
 func (g *Game) SetWindow(w fyne.Window) {
@@ -74,9 +102,6 @@ func (g *Game) PlayCard(player *player.Player, cardIndex int) {
 
 	// Add played card to discard pile
 	g.DiscardPile = append(g.DiscardPile, playerCard)
-
-	// Draw a new card
-	g.DrawCard(player)
 }
 
 func (g *Game) PlayRandomCard(player *player.Player) {
@@ -165,24 +190,34 @@ func (g *Game) SwitchTurn() {
 		g.CurrentPlayer = &g.Player1
 	}
 	g.TurnCount++
+	g.CurrentPhase = DrawPhase
 }
 
 func (g *Game) GameLoop() {
 	for !g.GameOver {
-		// Start of turn
+		g.CurrentPhase = DrawPhase
 		g.DrawCard(g.CurrentPlayer)
+		g.CurrentPhase = PlayPhase
 
 		if g.CurrentPlayer == &g.Player1 {
 			// Player 1's turn (human player)
-			// The UI will handle the card playing for Player 1
 			fmt.Printf("%s's turn\n", g.CurrentPlayer.Name)
+			// Wait for the player to end their turn
+			<-g.EndTurn
 		} else {
 			// Player 2's turn (opponent)
 			g.PlayRandomCard(g.CurrentPlayer)
+			time.Sleep(1 * time.Second) // Simulate opponent thinking
 		}
 
-		// End of turn
-		if len(g.CurrentPlayer.Hand) == 0 || g.TurnCount >= 20 {
+		g.CurrentPhase = EndPhase
+		// Update UI
+		if g.UIUpdate != nil {
+			g.UIUpdate()
+		}
+
+		// Check for game over conditions
+		if g.CheckGameOver() {
 			g.GameOver = true
 		} else {
 			g.SwitchTurn()
@@ -193,9 +228,17 @@ func (g *Game) GameLoop() {
 	g.DetermineWinner()
 }
 
+func (g *Game) CheckGameOver() bool {
+	return len(g.Player1.Hand) == 0 || len(g.Player2.Hand) == 0 || g.Player1.Health <= 0 || g.Player2.Health <= 0 || g.TurnCount >= 20
+}
+
 func (g *Game) DetermineWinner() {
 	var winner string
-	if g.Player1.Score > g.Player2.Score {
+	if g.Player1.Health <= 0 || len(g.Player1.Hand) == 0 {
+		winner = g.Player2.Name
+	} else if g.Player2.Health <= 0 || len(g.Player2.Hand) == 0 {
+		winner = g.Player1.Name
+	} else if g.Player1.Score > g.Player2.Score {
 		winner = g.Player1.Name
 	} else if g.Player2.Score > g.Player1.Score {
 		winner = g.Player2.Name
@@ -205,4 +248,9 @@ func (g *Game) DetermineWinner() {
 
 	fmt.Printf("Game Over! %s wins!\n", winner)
 	fmt.Printf("Final Score: %s: %d, %s: %d\n", g.Player1.Name, g.Player1.Score, g.Player2.Name, g.Player2.Score)
+
+	// Update UI with game over state
+	if g.UIUpdate != nil {
+		g.UIUpdate()
+	}
 }

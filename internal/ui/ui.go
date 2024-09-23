@@ -14,27 +14,91 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+var endTurnButton *widget.Button
+var newGameButton *widget.Button
+
 func SetupUI(g *game.Game) {
 	g.ScoreLabel = widget.NewLabel(fmt.Sprintf("Score - %s: %d, %s: %d", g.Player1.Name, g.Player1.Score, g.Player2.Name, g.Player2.Score))
+	phaseLabel := widget.NewLabel("Current Phase: Draw")
 
 	player1Field := createPlayerField(g, &g.Player1, true)
 	player2Field := createPlayerField(g, &g.Player2, false)
+
+	endTurnButton = widget.NewButton("End Turn", func() {
+		g.EndTurn <- true
+	})
+	endTurnButton.Disable()
+
+	newGameButton = widget.NewButton("New Game", func() {
+		startNewGame(g)
+	})
 
 	gameBoard := container.NewVBox(
 		player2Field,
 		widget.NewSeparator(),
 		player1Field,
+		container.NewHBox(endTurnButton, newGameButton),
 	)
 
-	content := container.NewBorder(g.ScoreLabel, nil, nil, nil, gameBoard)
+	content := container.NewBorder(container.NewVBox(g.ScoreLabel, phaseLabel), nil, nil, nil, gameBoard)
 
 	g.GetWindow().SetContent(content)
 	g.GetWindow().Resize(fyne.NewSize(1920, 1080))
+
+	// Set up the UIUpdate function
+	g.UIUpdate = func() {
+		g.GetWindow().Canvas().Refresh(content)
+		updatePhaseLabel(g, phaseLabel)
+		updateEndTurnButton(g)
+		updatePlayerFields(g, player1Field, player2Field)
+	}
+}
+
+func startNewGame(g *game.Game) {
+	g.Reset()
+	g.UIUpdate()
+	go g.GameLoop()
+}
+
+func updatePhaseLabel(g *game.Game, label *widget.Label) {
+	var phase string
+	switch g.CurrentPhase {
+	case game.DrawPhase:
+		phase = "Draw"
+	case game.PlayPhase:
+		phase = "Play"
+	case game.EndPhase:
+		phase = "End"
+	}
+	label.SetText(fmt.Sprintf("Current Phase: %s", phase))
+}
+
+func updateEndTurnButton(g *game.Game) {
+	if g.CurrentPlayer == &g.Player1 && g.CurrentPhase == game.PlayPhase {
+		endTurnButton.Enable()
+	} else {
+		endTurnButton.Disable()
+	}
+}
+
+func updatePlayerFields(g *game.Game, player1Field, player2Field *fyne.Container) {
+	updatePlayerField(g, &g.Player1, player1Field)
+	updatePlayerField(g, &g.Player2, player2Field)
+}
+
+func updatePlayerField(g *game.Game, player *player.Player, field *fyne.Container) {
+	// Update player card
+	playerCard := field.Objects[2].(*fyne.Container).Objects[1].(*fyne.Container)
+	updatePlayerCard(player, playerCard)
+
+	// Update hand
+	handCards := field.Objects[1].(*fyne.Container)
+	updateHandCards(g, player, handCards)
 }
 
 func createPlayerField(g *game.Game, player *player.Player, isBottom bool) *fyne.Container {
 	playerCard := createPlayerCard(player)
-	cardSpaces := createCardSpaces(g, player)
+	cardSpaces := createCardSpaces()
 	
 	var handCards *fyne.Container
 	var deck, discardPile *widget.Button
@@ -85,6 +149,15 @@ func createPlayerCard(player *player.Player) *fyne.Container {
 	)
 }
 
+func updatePlayerCard(player *player.Player, card *fyne.Container) {
+	card.Objects[1].(*widget.Label).SetText(fmt.Sprintf("Health: %d/%d", player.Health, player.MaxHealth))
+	card.Objects[2].(*widget.Label).SetText(fmt.Sprintf("Mana: %d/%d", player.Mana, player.MaxMana))
+	card.Objects[3].(*widget.Label).SetText(fmt.Sprintf("Armor: %d", player.Armor))
+	card.Objects[4].(*widget.Label).SetText(fmt.Sprintf("Ring: %s", getItemName(player.Ring)))
+	card.Objects[5].(*widget.Label).SetText(fmt.Sprintf("Necklace: %s", getItemName(player.Necklace)))
+	card.Objects[6].(*widget.Label).SetText(fmt.Sprintf("Weapon: %s", getItemName(player.Weapon)))
+}
+
 func getItemName(item *player.Item) string {
 	if item == nil {
 		return "None"
@@ -92,7 +165,7 @@ func getItemName(item *player.Item) string {
 	return item.Name
 }
 
-func createCardSpaces(g *game.Game, player *player.Player) [2]*fyne.Container {
+func createCardSpaces() [2]*fyne.Container {
 	leftSpace := container.NewVBox()
 	rightSpace := container.NewVBox()
 
@@ -126,17 +199,31 @@ func createHandCards(g *game.Game, player *player.Player) *fyne.Container {
 	return handCards
 }
 
-func playCard(g *game.Game, player *player.Player, cardIndex int) {
-	g.PlayCard(player, cardIndex)
-	showRoundResult(g)
-
-	// Check if the game is over
-	if len(player.Hand) == 0 || len(g.Deck) == 0 {
-		showGameResult(g)
+func updateHandCards(g *game.Game, player *player.Player, handCards *fyne.Container) {
+	handCards.RemoveAll()
+	for i, card := range player.Hand {
+		cardButton := widget.NewButton(card.GetInfo(), func(i int) func() {
+			return func() {
+				playCard(g, player, i)
+			}
+		}(i))
+		handCards.Add(cardButton)
 	}
+}
 
-	// Update UI
-	g.GetWindow().Content().Refresh()
+func playCard(g *game.Game, player *player.Player, cardIndex int) {
+	if g.CurrentPlayer == player && g.CurrentPhase == game.PlayPhase {
+		g.PlayCard(player, cardIndex)
+		showRoundResult(g)
+
+		// Check if the game is over
+		if g.CheckGameOver() {
+			showGameResult(g)
+		}
+
+		// Update UI
+		g.UIUpdate()
+	}
 }
 
 func showRoundResult(g *game.Game) {
@@ -154,7 +241,11 @@ func showRoundResult(g *game.Game) {
 
 func showGameResult(g *game.Game) {
 	var winner string
-	if g.Player1.Score > g.Player2.Score {
+	if g.Player1.Health <= 0 || len(g.Player1.Hand) == 0 {
+		winner = g.Player2.Name
+	} else if g.Player2.Health <= 0 || len(g.Player2.Hand) == 0 {
+		winner = g.Player1.Name
+	} else if g.Player1.Score > g.Player2.Score {
 		winner = g.Player1.Name
 	} else if g.Player2.Score > g.Player1.Score {
 		winner = g.Player2.Name
@@ -162,8 +253,8 @@ func showGameResult(g *game.Game) {
 		winner = "It's a tie!"
 	}
 
-	message := fmt.Sprintf("Game Over!\n%s wins!\n\nFinal Score:\n%s: %d\n%s: %d", 
-		winner, g.Player1.Name, g.Player1.Score, g.Player2.Name, g.Player2.Score)
+	message := fmt.Sprintf("Game Over!\n%s wins!\n\nFinal Score:\n%s: %d (Health: %d)\n%s: %d (Health: %d)", 
+		winner, g.Player1.Name, g.Player1.Score, g.Player1.Health, g.Player2.Name, g.Player2.Score, g.Player2.Health)
 
 	dialog := widget.NewLabel(message)
 	popUp := widget.NewPopUp(dialog, g.GetWindow().Canvas())
