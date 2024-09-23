@@ -127,16 +127,11 @@ func createHandCards(g *game.Game, player *player.Player) *fyne.Container {
 }
 
 func playCard(g *game.Game, player *player.Player, cardIndex int) {
-	opponent := &g.Player2
-	if player == &g.Player2 {
-		opponent = &g.Player1
-	}
-
-	g.PlayCard(player, opponent, cardIndex)
-	showRoundResult(g, player, opponent)
+	g.PlayCard(player, cardIndex)
+	showRoundResult(g)
 
 	// Check if the game is over
-	if len(player.Hand) == 0 || len(opponent.Hand) == 0 {
+	if len(player.Hand) == 0 || len(g.Deck) == 0 {
 		showGameResult(g)
 	}
 
@@ -144,12 +139,11 @@ func playCard(g *game.Game, player *player.Player, cardIndex int) {
 	g.GetWindow().Content().Refresh()
 }
 
-func showRoundResult(g *game.Game, player, opponent *player.Player) {
+func showRoundResult(g *game.Game) {
 	lastPlay := g.LastPlay
 	message := fmt.Sprintf(
-		"%s played %s\n%s played %s\n%s",
-		player.Name, lastPlay.PlayerCard.GetInfo(),
-		opponent.Name, lastPlay.OpponentCard.GetInfo(),
+		"%s played %s\n%s",
+		g.CurrentPlayer.Name, lastPlay.PlayerCard.GetInfo(),
 		lastPlay.Message,
 	)
 

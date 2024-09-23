@@ -12,13 +12,16 @@ import (
 )
 
 type Game struct {
-	Player1     player.Player
-	Player2     player.Player
-	ScoreLabel  *widget.Label
-	window      fyne.Window
-	LastPlay    PlayResult
-	Deck        []card.Card
-	DiscardPile []card.Card
+	Player1       player.Player
+	Player2       player.Player
+	CurrentPlayer *player.Player
+	ScoreLabel    *widget.Label
+	window        fyne.Window
+	LastPlay      PlayResult
+	Deck          []card.Card
+	DiscardPile   []card.Card
+	TurnCount     int
+	GameOver      bool
 }
 
 type PlayResult struct {
@@ -29,12 +32,13 @@ type PlayResult struct {
 
 func NewGame() *Game {
 	player1, player2 := initializePlayers()
-	
-	return &Game{
+	game := &Game{
 		Player1: player1,
 		Player2: player2,
 		Deck:    InitializeDeck(),
 	}
+	game.CurrentPlayer = &game.Player1
+	return game
 }
 
 func (g *Game) SetWindow(w fyne.Window) {
@@ -49,7 +53,7 @@ func (g *Game) UpdateScore() {
 	g.ScoreLabel.SetText(fmt.Sprintf("Score - %s: %d, %s: %d", g.Player1.Name, g.Player1.Score, g.Player2.Name, g.Player2.Score))
 }
 
-func (g *Game) PlayCard(player, opponent *player.Player, cardIndex int) {
+func (g *Game) PlayCard(player *player.Player, cardIndex int) {
 	if cardIndex >= len(player.Hand) {
 		return
 	}
@@ -57,43 +61,31 @@ func (g *Game) PlayCard(player, opponent *player.Player, cardIndex int) {
 	playerCard := player.Hand[cardIndex]
 	player.Hand = append(player.Hand[:cardIndex], player.Hand[cardIndex+1:]...)
 
-	opponentCardIndex := rand.Intn(len(opponent.Hand))
-	opponentCard := opponent.Hand[opponentCardIndex]
-	opponent.Hand = append(opponent.Hand[:opponentCardIndex], opponent.Hand[opponentCardIndex+1:]...)
-
-	// Play the cards
+	// Play the card
 	playerCard.Play(player)
-	opponentCard.Play(opponent)
 
-	message := g.DetermineRoundWinner(player, opponent, playerCard, opponentCard)
+	message := fmt.Sprintf("%s played %s", player.Name, playerCard.GetInfo())
 	g.UpdateScore()
 
 	g.LastPlay = PlayResult{
-		PlayerCard:   playerCard,
-		OpponentCard: opponentCard,
-		Message:      message,
+		PlayerCard: playerCard,
+		Message:    message,
 	}
 
-	// Add played cards to discard pile
-	g.DiscardPile = append(g.DiscardPile, playerCard, opponentCard)
+	// Add played card to discard pile
+	g.DiscardPile = append(g.DiscardPile, playerCard)
 
-	// Draw new cards
+	// Draw a new card
 	g.DrawCard(player)
-	g.DrawCard(opponent)
 }
 
-func (g *Game) DetermineRoundWinner(player, opponent *player.Player, playerCard, opponentCard card.Card) string {
-	playerPower := playerCard.Power + player.GetTotalBonus()
-	opponentPower := opponentCard.Power + opponent.GetTotalBonus()
-
-	if playerPower > opponentPower {
-		player.Score++
-		return fmt.Sprintf("%s won the round!", player.Name)
-	} else if opponentPower > playerPower {
-		opponent.Score++
-		return fmt.Sprintf("%s won the round!", opponent.Name)
+func (g *Game) PlayRandomCard(player *player.Player) {
+	if len(player.Hand) == 0 {
+		return
 	}
-	return "The round ended in a tie!"
+
+	cardIndex := rand.Intn(len(player.Hand))
+	g.PlayCard(player, cardIndex)
 }
 
 func InitializeDeck() []card.Card {
@@ -164,4 +156,53 @@ func (g *Game) DealInitialHands() {
 		g.DrawCard(&g.Player1)
 		g.DrawCard(&g.Player2)
 	}
+}
+
+func (g *Game) SwitchTurn() {
+	if g.CurrentPlayer == &g.Player1 {
+		g.CurrentPlayer = &g.Player2
+	} else {
+		g.CurrentPlayer = &g.Player1
+	}
+	g.TurnCount++
+}
+
+func (g *Game) GameLoop() {
+	for !g.GameOver {
+		// Start of turn
+		g.DrawCard(g.CurrentPlayer)
+
+		if g.CurrentPlayer == &g.Player1 {
+			// Player 1's turn (human player)
+			// The UI will handle the card playing for Player 1
+			fmt.Printf("%s's turn\n", g.CurrentPlayer.Name)
+		} else {
+			// Player 2's turn (opponent)
+			g.PlayRandomCard(g.CurrentPlayer)
+		}
+
+		// End of turn
+		if len(g.CurrentPlayer.Hand) == 0 || g.TurnCount >= 20 {
+			g.GameOver = true
+		} else {
+			g.SwitchTurn()
+		}
+	}
+
+	// Game over
+	g.DetermineWinner()
+}
+
+func (g *Game) DetermineWinner() {
+	var winner string
+	if g.Player1.Score > g.Player2.Score {
+		winner = g.Player1.Name
+	} else if g.Player2.Score > g.Player1.Score {
+		winner = g.Player2.Name
+	} else {
+		winner = "It's a tie!"
+	}
+
+	fmt.Printf("Game Over! %s wins!\n", winner)
+	fmt.Printf("Final Score: %s: %d, %s: %d\n", g.Player1.Name, g.Player1.Score, g.Player2.Name, g.Player2.Score)
 }

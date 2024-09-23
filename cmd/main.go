@@ -19,10 +19,13 @@ func main() {
 	g := game.NewGame()
 	g.SetWindow(w)
 
-	// Deal initial hands
+	// Initialize the deck and deal initial hands
 	g.DealInitialHands()
 
 	ui.SetupUI(g)
+
+	// Start the game loop in a separate goroutine
+	go g.GameLoop()
 
 	w.ShowAndRun()
 }
